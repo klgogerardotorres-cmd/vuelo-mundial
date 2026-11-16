@@ -287,8 +287,10 @@ async function initCesium(){
   if(typeof Cesium==='undefined'){ errMsg('No se pudo cargar el motor 3D (sin internet).'); return; }
   viewer = new Cesium.Viewer('cesium', { animation:false, timeline:false, baseLayerPicker:false, geocoder:false, homeButton:false,
     navigationHelpButton:false, sceneModePicker:false, fullscreenButton:false, infoBox:false, selectionIndicator:false,
-    baseLayer:false, shouldAnimate:true, requestRenderMode:false, msaaSamples:(P.quality==='alta'?4:1) });
+    baseLayer:false, shouldAnimate:true, requestRenderMode:false, showRenderLoopErrors:false, msaaSamples:(P.quality==='alta'?4:1) });
   scene = viewer.scene; scene.screenSpaceCameraController.enableInputs=false;
+  scene.renderError.addEventListener((sc, err)=>{ renderFails++; errMsg('Error de dibujo ('+renderFails+'): '+(err&&err.message||err));
+    if(clouds){ clouds.show=false; } if(renderFails<6) setTimeout(()=>{ try{ viewer.useDefaultRenderLoop=true; }catch(e){} }, 300); });
   scene.globe.baseColor = Cesium.Color.fromCssColorString('#1d3550');
   scene.globe.enableLighting=false; scene.globe.depthTestAgainstTerrain=true;
   scene.skyAtmosphere.show=true; scene.fog.density=1.6e-4; scene.highDynamicRange=false;
@@ -301,7 +303,7 @@ async function initCesium(){
     planeModel.readyEvent.addEventListener(()=>{ try{ planeModel.activeAnimations.addAll({loop:Cesium.ModelAnimationLoop.REPEAT, multiplier:3}); }catch(e){} });
   }catch(e){ errMsg('Modelo del avión no cargó: '+e.message); }
   addMarkers();
-  if(P.clouds) try{ clouds = scene.primitives.add(new Cesium.CloudCollection({noiseDetail:16})); }catch(e){ clouds=null; }
+  try{ clouds = scene.primitives.add(new Cesium.BillboardCollection({scene})); clouds.show=!!P.clouds; }catch(e){ clouds=null; }
   scene.preUpdate.addEventListener(tick);
 }
 async function initMap(){
@@ -448,9 +450,9 @@ function updMenu(dt){ const m=GAME.menu; if(!m) return; const h=IN.hand;
   else if(m.dr>=1){ SND.tick(); closeMenu(); if(GAME.mode==='orbit'){ GAME.magnetCool[GAME.orbit.p.id]=performance.now(); GAME.mode='free'; GAME.orbit=null; } say('¡A volar!', {interrupt:true}); } }
 
 /* ---------- Bucle principal ---------- */
-let lastT=performance.now(), saveAcc=0, nearAcc=0;
+let lastT=performance.now(), saveAcc=0, nearAcc=0, renderFails=0;
+(function cornerLoop(){ updCorner(performance.now()); requestAnimationFrame(cornerLoop); })();
 function tick(){ const now=performance.now(); let dt=Math.min(.1,(now-lastT)/1000); lastT=now;
-  updCorner(now);
   if(GAME.panel){ render(0); return; }
   updHands(dt, now); updSides();
   if(!GAME.started){ GAME.startDw=dwellStep(GAME.startDw, IN.hand!=='N', dt, P.dwell); setRing($('startC'),339.3,GAME.startDw); if(GAME.startDw>=1) startGame(); render(0); return; }
@@ -492,7 +494,12 @@ function updClouds(){ if(!clouds || !P.clouds) return; const agl=S.alt-S.ground;
   if(cloudCenter && gcDist(S.lat,S.lon,cloudCenter[0],cloudCenter[1])<30000) return; if(agl>60000) return;
   cloudCenter=[S.lat,S.lon]; clouds.removeAll(); let seed=Math.floor((S.lat*1000+S.lon*37)%9999); const rnd=()=>{seed=(seed*16807)%2147483647; return (seed%10000)/10000;};
   for(let i=0;i<34;i++){ const [la,lo]=gcDest(S.lat,S.lon,rnd()*2*Math.PI, 3000+rnd()*42000); const w=500+rnd()*900, hgt=180+rnd()*260;
-    clouds.add({ position:Cesium.Cartesian3.fromDegrees(lo,la,S.ground+1500+rnd()*1200), scale:new Cesium.Cartesian2(w,hgt), maximumSize:new Cesium.Cartesian3(w,hgt,Math.min(w,hgt)/1.5), slice:.36+rnd()*.2, brightness:1 }); } }
+    clouds.add({ position:Cesium.Cartesian3.fromDegrees(lo,la,S.ground+1500+rnd()*1200), image:cloudImg(i%4), sizeInMeters:true, width:w*1.4, height:w*.7, color:new Cesium.Color(1,1,1,.88) }); } }
+const CLOUD_IMGS=[];
+function cloudImg(k){ if(CLOUD_IMGS[k]) return CLOUD_IMGS[k]; const c=document.createElement('canvas'); c.width=256; c.height=128; const g=c.getContext('2d'); let sd=k*977+13; const r=()=>{sd=(sd*16807)%2147483647; return (sd%10000)/10000;};
+  for(let i=0;i<26;i++){ const x=40+r()*176, y=50+r()*40-Math.abs(x-128)*.12, rad=18+r()*30; const gr=g.createRadialGradient(x,y-rad*.25,rad*.1,x,y,rad); const sh=Math.round(235-Math.max(0,y-60)*.9);
+    gr.addColorStop(0,'rgba(255,255,255,.95)'); gr.addColorStop(.55,`rgba(${sh},${sh},${sh+8},.6)`); gr.addColorStop(1,'rgba(255,255,255,0)'); g.fillStyle=gr; g.beginPath(); g.arc(x,y,rad,0,7); g.fill(); }
+  return CLOUD_IMGS[k]=c; }
 
 /* ---------- Render: avión, cámara y HUD ---------- */
 let camHdg=null, camRange=80, camPitch=-.16;
@@ -589,6 +596,7 @@ function togglePanel(open){ const el=$('panel'); GAME.panel = open===undefined? 
 updStamps(); buildAltMarks();
 if(SAVE.pos && isFinite(SAVE.pos.lat)) $('startSub').textContent='Seguiremos volando desde donde quedamos';
 initCesium().catch(e=>errMsg('Error al iniciar: '+(e.message||e)));
+if(location.hash==='#panel') setTimeout(()=>togglePanel(true), 300);
 window.VM = {S, GAME, IN, P, POIS, startTravel, openMenu, enterOrbit, get viewer(){return viewer;}, get mapMode(){return mapMode;}};
 </script>
 </body>
